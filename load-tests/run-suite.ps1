@@ -30,20 +30,20 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $reportFile = Join-Path $ResultsDir "suite-$timestamp.txt"
 
 Write-Host ""
-Write-Host "=== Suite SEQUENCIAL — um endpoint por vez (comparacao no terminal) ===" -ForegroundColor Cyan
+Write-Host "=== Suite SEQUENCIAL - um endpoint por vez (comparacao no terminal) ===" -ForegroundColor Cyan
 Write-Host "Para rodar TODOS em paralelo e ver no Grafana: .\run-all.ps1" -ForegroundColor Yellow
 Write-Host "Grafana: http://localhost:3000/d/ecommerce-load-test" -ForegroundColor DarkGray
 Write-Host ""
 
 foreach ($test in $tests) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($test.File)
-    Write-Host ">> $($test.Module) — $($test.Endpoint)" -ForegroundColor Yellow
+    Write-Host (">> {0} - {1}" -f $test.Module, $test.Endpoint) -ForegroundColor Yellow
 
     $output = docker compose -f $ComposeFile --profile load-test run --rm `
         -e VUS=$Vus -e DURATION=$Duration `
         k6 run "/scripts/$($test.File)" 2>&1 | Out-String
 
-  $output | Out-File -FilePath (Join-Path $ResultsDir "$name-$timestamp.log") -Encoding utf8
+    $output | Out-File -FilePath (Join-Path $ResultsDir "$name-$timestamp.log") -Encoding utf8
     Add-Content -Path $reportFile -Value ("`n=== {0} | {1} | {2} ===" -f $test.Module, $test.Store, $test.Endpoint)
     Add-Content -Path $reportFile -Value $output
 
@@ -72,4 +72,4 @@ Write-Host "=== RESUMO COMPARATIVO ===" -ForegroundColor Green
 $summary | Format-Table -AutoSize
 
 $summary | Format-Table -AutoSize | Out-String | Add-Content -Path $reportFile
-Write-Host "Relatório salvo em: $reportFile" -ForegroundColor DarkGray
+Write-Host "Relatorio salvo em: $reportFile" -ForegroundColor DarkGray

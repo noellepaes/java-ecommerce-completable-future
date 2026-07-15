@@ -197,62 +197,66 @@ Covered scenarios include auth, products, customers, orders, payments, Redis rec
 > 2. Paste the summary metrics below.  
 > 3. Optionally attach Grafana screenshots under `docs/screenshots/` and link them here.
 
-### Test conditions (fill in)
+### Test conditions
 
 | Field | Value |
 |-------|--------|
-| Date | _TBD_ |
-| Branch / commit (before) | _TBD_ |
+| Date | 2026-07-15 |
+| Branch / commit (before) | `main` @ `c32bbde` |
 | Branch / commit (after) | _TBD_ |
-| VUs | _e.g. 50_ |
-| Duration | _e.g. 30s_ |
-| Script | _e.g. `run-suite.ps1` / `run-all.ps1` / scenario name_ |
-| Environment | _e.g. Docker Compose on local machine_ |
+| VUs | 50 |
+| Duration | 30s per endpoint |
+| Script | `load-tests/run-suite.ps1` (sequential suite) |
+| Environment | Docker Compose on local machine (`app` + Postgres + Redis) |
+| Raw report | `load-tests/results/suite-20260715-143408.txt` |
 
 ---
 
 ### BEFORE — synchronous baseline (no CompletableFuture)
 
-_Paste results after the first measurement run._
+Measured on 2026-07-15 with the current synchronous implementation (no `CompletableFuture` yet).
 
 #### Summary
 
 | Metric | Value |
 |--------|--------|
-| Total requests | |
-| Requests/s (avg) | |
-| http_req_duration p95 | |
-| http_req_failed | |
-| Checks passed | |
+| Total requests (all scenarios) | 271,407 |
+| Requests/s (avg) | ~127–1,367 RPS depending on endpoint (see table) |
+| http_req_duration p95 | Best ~3.2 ms (reads); worst **470.31 ms** (`POST /api/auth/login`) |
+| http_req_failed | **4.22%** overall (11,440 / 271,407) — almost entirely from `POST /api/orders/{id}/items` |
+| Checks passed | 100% on 13/14 scenarios; **14.04%** on add-item |
 
-#### Per endpoint (optional)
+#### Per endpoint
 
 | Module | Endpoint | Reqs | RPS | p95 | Failures | Checks |
 |--------|----------|------|-----|-----|----------|--------|
-| Auth | `POST /api/auth/login` | | | | | |
-| Auth | `GET /api/auth/users` | | | | | |
-| Product | `GET /api/products` | | | | | |
-| Product | `GET /api/products/{id}` | | | | | |
-| Customer | `GET /api/customers` | | | | | |
-| Customer | `GET /api/customers/{id}` | | | | | |
-| Order | `GET /api/orders/customer/{id}` | | | | | |
-| Order | `POST /api/orders` | | | | | |
-| Order | `POST /api/orders/{id}/items` | | | | | |
-| Order | `POST /api/orders/{id}/pay` | | | | | |
-| Payment | `POST /api/payments` | | | | | |
-| Redis | `GET /api/recommendations/customers/{id}` | | | | | |
-| Redis | `POST /api/recommendations/.../views` | | | | | |
-| Checkout | order + item + payment | | | | | |
+| Auth | `POST /api/auth/login` | 3,878 | 127.72 | 470.31 ms | 0.00% | 100.00% |
+| Auth | `GET /api/auth/users` | 14,500 | 482.50 | 5.01 ms | 0.00% | 100.00% |
+| Product | `GET /api/products` | 14,650 | 487.48 | 3.41 ms | 0.00% | 100.00% |
+| Product | `GET /api/products/{id}` | 14,652 | 486.81 | 3.38 ms | 0.00% | 100.00% |
+| Customer | `GET /api/customers` | 14,650 | 487.99 | 3.42 ms | 0.00% | 100.00% |
+| Customer | `GET /api/customers/{id}` | 14,680 | 486.70 | 3.23 ms | 0.00% | 100.00% |
+| Order | `GET /api/orders/customer/{id}` | 14,652 | 487.12 | 3.37 ms | 0.00% | 100.00% |
+| Order | `POST /api/orders` | 14,452 | 479.25 | 6.61 ms | 0.00% | 100.00% |
+| Order | `POST /api/orders/{id}/items` | 13,312 | 441.03 | 18.98 ms | **85.93%** | **14.04%** |
+| Order | `POST /api/orders/{id}/pay` | 40,865 | 1,353.06 | 5.67 ms | 0.00% | 100.00% |
+| Payment | `POST /api/payments` | 40,778 | 1,351.44 | 6.64 ms | 0.00% | 100.00% |
+| Redis | `GET /api/recommendations/customers/{id}` | 14,602 | 484.21 | 4.52 ms | 0.00% | 100.00% |
+| Redis | `POST /api/recommendations/.../views` | 14,502 | 481.97 | 4.85 ms | 0.00% | 100.00% |
+| Checkout | order + item + payment | 41,234 | 1,367.12 | 4.99 ms | 0.00% | 100.00% |
 
 **Notes / observations (before):**
 
--  
--  
+- Most read endpoints sit around **480–490 RPS** with p95 roughly **3–5 ms** under 50 VUs.
+- `POST /api/auth/login` is the clear latency outlier (p95 **470 ms**, ~128 RPS) — bcrypt/password hashing dominates.
+- `POST /api/orders/{id}/items` degraded under load (**85.93%** failures): stock was exhausted / business rules rejected most requests after the seed inventory ran out — not an infrastructure crash.
+- Pay / payment / checkout scripts reached **~1,350+ RPS** with low p95; treat them as scenario-specific (request mix), not directly comparable to pure CRUD GETs.
+- This is the **baseline** for a future `CompletableFuture` comparison — re-run the same suite with identical VUs/duration after the change.
 
 **Screenshots (before):**
 
-- Grafana load-test dashboard: _link or `docs/screenshots/before-load-test.png`_  
-- JVM / threads (optional): _link or path_  
+- Grafana load-test dashboard: http://localhost:3000/d/ecommerce-load-test _(optional screenshot TBD)_  
+- JVM / threads (optional): http://localhost:3000  
 
 ---
 
