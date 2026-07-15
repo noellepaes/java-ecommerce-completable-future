@@ -6,14 +6,16 @@ import { bootstrap, createOrder } from '../lib/setup.js';
 export const options = standardOptions('orders-add-item', 3500);
 
 export function setup() {
-  const data = bootstrap();
-  const order = createOrder(data.customerId);
-  return { ...data, orderId: order.id };
+  return bootstrap();
 }
 
 export default function (data) {
+  // One order per iteration avoids @Version conflicts when many VUs
+  // hammer the same aggregate root concurrently.
+  const order = createOrder(data.customerId);
+
   const res = http.post(
-    `${config.baseUrl}/api/orders/${data.orderId}/items`,
+    `${config.baseUrl}/api/orders/${order.id}/items`,
     JSON.stringify({
       productId: data.productId,
       productName: data.productName,

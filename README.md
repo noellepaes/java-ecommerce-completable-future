@@ -208,7 +208,7 @@ Covered scenarios include auth, products, customers, orders, payments, Redis rec
 | Duration | 30s per endpoint |
 | Script | `load-tests/run-suite.ps1` (sequential suite) |
 | Environment | Docker Compose on local machine (`app` + Postgres + Redis) |
-| Raw report | `load-tests/results/suite-20260715-143408.txt` |
+| Raw report | `load-tests/results/suite-20260715-143408.txt` (+ re-run of add-item) |
 
 ---
 
@@ -220,11 +220,11 @@ Measured on 2026-07-15 with the current synchronous implementation (no `Completa
 
 | Metric | Value |
 |--------|--------|
-| Total requests (all scenarios) | 271,407 |
-| Requests/s (avg) | ~127–1,367 RPS depending on endpoint (see table) |
+| Total requests (all scenarios) | 286,055 |
+| Requests/s (avg) | ~128–1,367 RPS depending on endpoint (see table) |
 | http_req_duration p95 | Best ~3.2 ms (reads); worst **470.31 ms** (`POST /api/auth/login`) |
-| http_req_failed | **4.22%** overall (11,440 / 271,407) — almost entirely from `POST /api/orders/{id}/items` |
-| Checks passed | 100% on 13/14 scenarios; **14.04%** on add-item |
+| http_req_failed | **0.00%** (after fixing the add-item scenario) |
+| Checks passed | **100%** on all 14 scenarios |
 
 #### Per endpoint
 
@@ -238,7 +238,7 @@ Measured on 2026-07-15 with the current synchronous implementation (no `Completa
 | Customer | `GET /api/customers/{id}` | 14,680 | 486.70 | 3.23 ms | 0.00% | 100.00% |
 | Order | `GET /api/orders/customer/{id}` | 14,652 | 487.12 | 3.37 ms | 0.00% | 100.00% |
 | Order | `POST /api/orders` | 14,452 | 479.25 | 6.61 ms | 0.00% | 100.00% |
-| Order | `POST /api/orders/{id}/items` | 13,312 | 441.03 | 18.98 ms | **85.93%** | **14.04%** |
+| Order | `POST /api/orders/{id}/items` | 27,960 | 929.01 | 5.51 ms | 0.00% | 100.00% |
 | Order | `POST /api/orders/{id}/pay` | 40,865 | 1,353.06 | 5.67 ms | 0.00% | 100.00% |
 | Payment | `POST /api/payments` | 40,778 | 1,351.44 | 6.64 ms | 0.00% | 100.00% |
 | Redis | `GET /api/recommendations/customers/{id}` | 14,602 | 484.21 | 4.52 ms | 0.00% | 100.00% |
@@ -249,7 +249,8 @@ Measured on 2026-07-15 with the current synchronous implementation (no `Completa
 
 - Most read endpoints sit around **480–490 RPS** with p95 roughly **3–5 ms** under 50 VUs.
 - `POST /api/auth/login` is the clear latency outlier (p95 **470 ms**, ~128 RPS) — bcrypt/password hashing dominates.
-- `POST /api/orders/{id}/items` degraded under load (**85.93%** failures): stock was exhausted / business rules rejected most requests after the seed inventory ran out — not an infrastructure crash.
+- First `orders-add-item` run failed **85.93%** because the script reused **one shared `orderId`** across 50 VUs → `@Version` optimistic-lock conflicts (`Row was updated or deleted by another transaction`). Not an EntityGraph/N+1 issue.
+- Script fixed: each iteration creates its **own order** then adds an item (same pattern as `orders-pay`). Re-run (50 VUs / 30s): **0% failures**, **100% checks**, p95 **5.51 ms**, ~929 RPS (includes create-order + add-item HTTP calls).
 - Pay / payment / checkout scripts reached **~1,350+ RPS** with low p95; treat them as scenario-specific (request mix), not directly comparable to pure CRUD GETs.
 - This is the **baseline** for a future `CompletableFuture` comparison — re-run the same suite with identical VUs/duration after the change.
 
