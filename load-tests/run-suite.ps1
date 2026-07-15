@@ -30,7 +30,8 @@ $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $reportFile = Join-Path $ResultsDir "suite-$timestamp.txt"
 
 Write-Host ""
-Write-Host "=== Suite de carga k6 — $Vus VUs / $Duration ===" -ForegroundColor Cyan
+Write-Host "=== Suite SEQUENCIAL — um endpoint por vez (comparacao no terminal) ===" -ForegroundColor Cyan
+Write-Host "Para rodar TODOS em paralelo e ver no Grafana: .\run-all.ps1" -ForegroundColor Yellow
 Write-Host "Grafana: http://localhost:3000/d/ecommerce-load-test" -ForegroundColor DarkGray
 Write-Host ""
 
