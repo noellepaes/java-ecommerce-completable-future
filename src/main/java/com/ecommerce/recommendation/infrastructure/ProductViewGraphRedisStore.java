@@ -1,7 +1,8 @@
 package com.ecommerce.recommendation.infrastructure;
 
+import com.ecommerce.config.AsyncExecutorConfig;
 import com.ecommerce.recommendation.config.RecommendationProperties;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -9,6 +10,8 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 /**
@@ -18,9 +21,10 @@ import java.util.stream.Collectors;
  *   <li>{@code ecommerce:views:product:{productId}} — SET de customerIds que viram o produto</li>
  * </ul>
  * Cada escrita renova o TTL nas duas chaves (dados efêmeros para recomendação).
+ * <p>
+ * {@link #recordView} grava os dois ramos (user↔product) em paralelo — são independentes.
  */
 @Component
-@RequiredArgsConstructor
 public class ProductViewGraphRedisStore {
 
     private static final String USER_VIEWS_PREFIX = "ecommerce:views:user:";
@@ -28,17 +32,33 @@ public class ProductViewGraphRedisStore {
 
     private final StringRedisTemplate redisTemplate;
     private final RecommendationProperties recommendationProperties;
+    private final Executor ioTaskExecutor;
+
+    public ProductViewGraphRedisStore(
+            StringRedisTemplate redisTemplate,
+            RecommendationProperties recommendationProperties,
+            @Qualifier(AsyncExecutorConfig.IO_TASK_EXECUTOR) Executor ioTaskExecutor) {
+        this.redisTemplate = redisTemplate;
+        this.recommendationProperties = recommendationProperties;
+        this.ioTaskExecutor = ioTaskExecutor;
+    }
 
     public void recordView(UUID customerId, UUID productId) {
         String userKey = userViewsKey(customerId);
         String productKey = productViewersKey(productId);
-
-        redisTemplate.opsForSet().add(userKey, productId.toString());
-        redisTemplate.opsForSet().add(productKey, customerId.toString());
-
         Duration ttl = recommendationProperties.customerHistoryTtl();
-        redisTemplate.expire(userKey, ttl);
-        redisTemplate.expire(productKey, ttl);
+
+        CompletableFuture<Void> userSide = CompletableFuture.runAsync(() -> {
+            redisTemplate.opsForSet().add(userKey, productId.toString());
+            redisTemplate.expire(userKey, ttl);
+        }, ioTaskExecutor);
+
+        CompletableFuture<Void> productSide = CompletableFuture.runAsync(() -> {
+            redisTemplate.opsForSet().add(productKey, customerId.toString());
+            redisTemplate.expire(productKey, ttl);
+        }, ioTaskExecutor);
+
+        CompletableFuture.allOf(userSide, productSide).join();
     }
 
     public Set<UUID> getUserViewedProductIds(UUID customerId) {

@@ -203,10 +203,10 @@ Covered scenarios include auth, products, customers, orders, payments, Redis rec
 |-------|--------|
 | Date | 2026-07-15 |
 | Branch / commit (before) | `main` @ `c32bbde` |
-| Branch / commit (after) | _TBD_ |
+| Branch / commit (after) | local worktree (CompletableFuture + `open-in-view: false`) |
 | VUs | 50 |
 | Duration | 30s per endpoint |
-| Script | `load-tests/run-suite.ps1` (sequential suite) |
+| Script | `load-tests/run-suite.ps1` (before); optimized endpoints re-run after CF |
 | Environment | Docker Compose on local machine (`app` + Postgres + Redis) |
 | Raw report | `load-tests/results/suite-20260715-143408.txt` (+ re-run of add-item) |
 
@@ -261,65 +261,63 @@ Measured on 2026-07-15 with the current synchronous implementation (no `Completa
 
 ---
 
-### AFTER — with CompletableFuture
+### AFTER — with CompletableFuture (independent I/O only)
 
-_Paste results after implementing parallel orchestration._
+Measured on 2026-07-16 after parallelizing **only** call sites where work does not depend on sibling results (`allOf` / parallel branches). Same VUs/duration (50 / 30s). Endpoints **not** listed below were left synchronous (single I/O or sequential dependency) and were not re-run.
 
-#### Summary
+#### Summary (optimized endpoints only)
 
 | Metric | Value |
 |--------|--------|
-| Total requests | |
-| Requests/s (avg) | |
-| http_req_duration p95 | |
-| http_req_failed | |
-| Checks passed | |
+| Approach | Spring MVC + JDBC/Redis **blocking** + `CompletableFuture` on a dedicated `ioTaskExecutor` |
+| What CF does here | Runs independent I/O **concurrently**; does **not** make JDBC/Redis non-blocking (not WebFlux/R2DBC) |
+| http_req_failed | **0.00%** on re-tested endpoints |
+| Checks passed | **100%** |
 
-#### Per endpoint (optional)
+#### Per endpoint (re-measured)
 
 | Module | Endpoint | Reqs | RPS | p95 | Failures | Checks |
 |--------|----------|------|-----|-----|----------|--------|
-| Auth | `POST /api/auth/login` | | | | | |
-| Auth | `GET /api/auth/users` | | | | | |
-| Product | `GET /api/products` | | | | | |
-| Product | `GET /api/products/{id}` | | | | | |
-| Customer | `GET /api/customers` | | | | | |
-| Customer | `GET /api/customers/{id}` | | | | | |
-| Order | `GET /api/orders/customer/{id}` | | | | | |
-| Order | `POST /api/orders` | | | | | |
-| Order | `POST /api/orders/{id}/items` | | | | | |
-| Order | `POST /api/orders/{id}/pay` | | | | | |
-| Payment | `POST /api/payments` | | | | | |
-| Redis | `GET /api/recommendations/customers/{id}` | | | | | |
-| Redis | `POST /api/recommendations/.../views` | | | | | |
-| Checkout | order + item + payment | | | | | |
+| Auth | `GET /api/auth/users` | 14,550 | 483.92 | 5.87 ms | 0.00% | 100.00% |
+| Redis | `GET /api/recommendations/customers/{id}` | 14,260 | 471.38 | 8.58 ms | 0.00% | 100.00% |
+| Redis | `POST /api/recommendations/.../views` | 14,652 | 485.91 | **3.56 ms** | 0.00% | 100.00% |
+
+#### Also changed in code (not a dedicated k6 row)
+
+| Use case | Parallelism |
+|----------|-------------|
+| `CreateCustomerUseCase` | `findByEmail` ∥ `findByCpf` before save |
+| `GetPurchaseRecommendationsUseCase` | Redis fan-out (viewers ∥ peers) + Postgres product hydration via `allOf` |
+| `ProductViewGraphRedisStore.recordView` | user SET/EXPIRE ∥ product SET/EXPIRE |
+| `ListUsersUseCase` | customer lookups per user via `allOf` |
+
+**Infra note:** `spring.jpa.open-in-view=false` + Hikari `maximum-pool-size=30`. With OSIV on, CF + JPA under load deadlocked the pool (Tomcat threads held connections while waiting on `join()`).
 
 **Notes / observations (after):**
 
-- Where `CompletableFuture` was applied: _e.g. checkout orchestration / recommendations_  
--  
--  
+- **`POST .../views` improved** (p95 4.85 → **3.56 ms**, ~−27%): two independent Redis branches run in parallel — textbook CF win.
+- **`GET .../recommendations` got slightly worse** (p95 4.52 → 8.58 ms) with the **small seed graph**: thread-pool / `allOf` overhead dominates when there are few Redis RTTs to overlap. CF shines when fan-out is large, not when N is tiny.
+- **`GET /api/auth/users` ≈ flat** (5.01 → 5.87 ms) with only 3 seed users — not enough independent lookups for a clear win.
+- Login / single-CRUD endpoints were **not** wrapped in CF: sequential JDBC or bcrypt-bound; `thenApply`-style chaining would not cut wall-clock time.
 
 **Screenshots (after):**
 
-- Grafana load-test dashboard: _link or `docs/screenshots/after-load-test.png`_  
-- JVM / threads (optional): _link or path_  
+- Grafana load-test dashboard: http://localhost:3000/d/ecommerce-load-test  
 
 ---
 
-### Comparison (fill after both runs)
+### Comparison (optimized endpoints)
 
-| Metric | Before | After | Delta |
-|--------|--------|-------|-------|
-| RPS | | | |
-| p95 latency | | | |
-| Error rate | | | |
-| CPU / threads (notes) | | | |
+| Endpoint | Before p95 | After p95 | Delta |
+|----------|------------|-----------|-------|
+| `POST /api/recommendations/.../views` | 4.85 ms | **3.56 ms** | **−27%** |
+| `GET /api/recommendations/customers/{id}` | 4.52 ms | 8.58 ms | +90% (overhead on small graph) |
+| `GET /api/auth/users` | 5.01 ms | 5.87 ms | ~flat (N=3 users) |
+| Error rate (those runs) | 0% | 0% | — |
 
 **Conclusion:**
 
-_Write a short conclusion: which endpoints improved, which stayed the same, and why._
-
+In Spring MVC + blocking JDBC/Redis, `CompletableFuture` helps when **independent** I/O can overlap (`allOf` / parallel branches) — as in `recordView`. It is **not** WebFlux: threads still block on socket wait. Purely sequential steps or tiny fan-out often stay flat or get worse due to executor overhead. Eliminating blocking wait requires a reactive stack (e.g. WebFlux + R2DBC), not CF alone.
 ---
 
 ## Domain rules (current)
@@ -355,9 +353,10 @@ Portuguese deep-dives (optional reading):
 3. [x] Redis recommendations  
 4. [x] Prometheus / Grafana monitoring  
 5. [x] k6 load-test suite (baseline ready)  
-6. [ ] Introduce `CompletableFuture` on critical paths  
-7. [ ] Fill **before / after** metrics in this README  
-8. [ ] (Optional) Extract modules into microservices / messaging  
+6. [x] Introduce `CompletableFuture` on **independent** I/O paths only  
+7. [x] Fill **before / after** metrics in this README  
+8. [ ] (Optional) Enrich Redis seed / fan-out to show larger CF wins on recommendations  
+9. [ ] (Optional) Extract modules into microservices / messaging  
 
 ---
 

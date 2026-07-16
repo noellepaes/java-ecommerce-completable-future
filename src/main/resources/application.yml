@@ -13,11 +13,16 @@ spring:
     username: ecommerce
     password: ecommerce
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
   
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    # OSIV + CompletableFuture em threads do Executor esgota o pool Hikari (deadlock).
+    open-in-view: false
+    show-sql: false
     properties:
       hibernate:
         format_sql: true

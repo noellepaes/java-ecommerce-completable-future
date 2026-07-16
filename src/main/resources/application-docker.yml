@@ -4,6 +4,13 @@ spring:
     username: ecommerce
     password: ecommerce
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+
+  jpa:
+    open-in-view: false
+    show-sql: false
 
   data:
     redis:
